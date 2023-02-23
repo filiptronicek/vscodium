@@ -71,6 +71,8 @@ else
   CHILD_CONCURRENCY=1 yarn --frozen-lockfile
 fi
 
+yarn add node-ovsx-sign@latest
+
 setpath() {
   { set +x; } 2>/dev/null
   echo "$( cat "${1}.json" | jq --arg 'path' "${2}" --arg 'value' "${3}" 'setpath([$path]; $value)' )" > "${1}.json"

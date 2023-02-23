@@ -1,0 +1,9 @@
+diff --git a/src/vs/platform/extensionManagement/node/extensionSignatureVerificationService.ts b/src/vs/platform/extensionManagement/node/extensionSignatureVerificationService.ts
+index e335e1f..6612d00 100644
+--- a/src/vs/platform/extensionManagement/node/extensionSignatureVerificationService.ts
++++ b/src/vs/platform/extensionManagement/node/extensionSignatureVerificationService.ts
+@@ -48,3 +48,3 @@ export class ExtensionSignatureVerificationService implements IExtensionSignatur
+ 				(resolve, reject) => require(
+-					['node-vsce-sign'],
++					['node-ovsx-sign'],
+ 					async (obj) => {
