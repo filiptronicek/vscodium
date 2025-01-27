@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# shellcheck disable=SC1091,2154
 
 set -e
 
@@ -21,70 +22,96 @@ cd vscode || { echo "'vscode' dir not found"; exit 1; }
 { set +x; } 2>/dev/null
 
 for file in ../patches/*.patch; do
-  if [ -f "${file}" ]; then
+  if [[ -f "${file}" ]]; then
     echo applying patch: "${file}";
-    git apply --ignore-whitespace "${file}"
-    if [ $? -ne 0 ]; then
-      echo failed to apply patch "${file}" 1>&2
+    # grep '^+++' "${file}"  | sed -e 's#+++ [ab]/#./vscode/#' | while read line; do shasum -a 256 "${line}"; done
+    if ! git apply --ignore-whitespace "${file}"; then
+      echo failed to apply patch "${file}" >&2
+      exit 1
     fi
   fi
 done
 
 if [[ "${VSCODE_QUALITY}" == "insider" ]]; then
   for file in ../patches/insider/*.patch; do
-    if [ -f "${file}" ]; then
+    if [[ -f "${file}" ]]; then
       echo applying patch: "${file}";
-      git apply --ignore-whitespace "${file}"
-      if [ $? -ne 0 ]; then
-        echo failed to apply patch "${file}" 1>&2
+      if ! git apply --ignore-whitespace "${file}"; then
+        echo failed to apply patch "${file}" >&2
+        exit 1
       fi
     fi
   done
 fi
 
 for file in ../patches/user/*.patch; do
-  if [ -f "${file}" ]; then
+  if [[ -f "${file}" ]]; then
     echo applying user patch: "${file}";
-    git apply --ignore-whitespace "${file}"
-    if [ $? -ne 0 ]; then
-      echo failed to apply patch "${file}" 1>&2
+    if ! git apply --ignore-whitespace "${file}"; then
+      echo failed to apply patch "${file}" >&2
+      exit 1
     fi
   fi
 done
 
-set -x
-
-if [[ "${OS_NAME}" == "osx" ]]; then
-  CHILD_CONCURRENCY=1 yarn --frozen-lockfile
-  yarn postinstall
-elif [[ "${npm_config_arch}" == "armv7l" || "${npm_config_arch}" == "ia32" ]]; then
-  # node-gyp@9.0.0 shipped with node@16.15.0 starts using config.gypi
-  # from the custom headers path if dist-url option was set, instead of
-  # using the config value from the process. Electron builds with pointer compression
-  # enabled for x64 and arm64, but incorrectly ships a single copy of config.gypi
-  # with v8_enable_pointer_compression option always set for all target architectures.
-  # We use the force_process_config option to use the config.gypi from the
-  # nodejs process executing npm for 32-bit architectures.
-  export npm_config_force_process_config="true"
-  CHILD_CONCURRENCY=1 yarn --frozen-lockfile
-else
-  CHILD_CONCURRENCY=1 yarn --frozen-lockfile
+if [[ -d "../patches/${OS_NAME}/" ]]; then
+  for file in "../patches/${OS_NAME}/"*.patch; do
+    if [[ -f "${file}" ]]; then
+      echo applying patch: "${file}";
+      if ! git apply --ignore-whitespace "${file}"; then
+        echo failed to apply patch "${file}" >&2
+        exit 1
+      fi
+    fi
+  done
 fi
 
+set -x
+
+export ELECTRON_SKIP_BINARY_DOWNLOAD=1
+export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+if [[ "${OS_NAME}" == "linux" ]]; then
+  export VSCODE_SKIP_NODE_VERSION_CHECK=1
+
+   if [[ "${npm_config_arch}" == "arm" ]]; then
+    export npm_config_arm_version=7
+  fi
+elif [[ "${OS_NAME}" == "windows" ]]; then
+  if [[ "${npm_config_arch}" == "arm" ]]; then
+    export npm_config_arm_version=7
+  fi
+fi
+
+for i in {1..5}; do # try 5 times
+  npm ci && break
+  if [[ $i == 3 ]]; then
+    echo "Npm install failed too many times" >&2
+    exit 1
+  fi
+  echo "Npm install failed $i, trying again..."
+
+  sleep $(( 15 * (i + 1)))
+done
+
 setpath() {
+  local jsonTmp
   { set +x; } 2>/dev/null
-  echo "$( cat "${1}.json" | jq --arg 'path' "${2}" --arg 'value' "${3}" 'setpath([$path]; $value)' )" > "${1}.json"
+  jsonTmp=$( jq --arg 'path' "${2}" --arg 'value' "${3}" 'setpath([$path]; $value)' "${1}.json" )
+  echo "${jsonTmp}" > "${1}.json"
   set -x
 }
 
 setpath_json() {
+  local jsonTmp
   { set +x; } 2>/dev/null
-  echo "$( cat "${1}.json" | jq --arg 'path' "${2}" --argjson 'value' "${3}" 'setpath([$path]; $value)' )" > "${1}.json"
+  jsonTmp=$( jq --arg 'path' "${2}" --argjson 'value' "${3}" 'setpath([$path]; $value)' "${1}.json" )
+  echo "${jsonTmp}" > "${1}.json"
   set -x
 }
 
 # product.json
-cp product.json product.json.bak
+cp product.json{,.bak}
 
 setpath "product" "checksumFailMoreInfoUrl" "https://go.microsoft.com/fwlink/?LinkId=828886"
 setpath "product" "documentationUrl" "https://go.microsoft.com/fwlink/?LinkID=533484#vscode"
@@ -102,7 +129,8 @@ setpath "product" "tipsAndTricksUrl" "https://go.microsoft.com/fwlink/?linkid=85
 setpath "product" "twitterUrl" "https://go.microsoft.com/fwlink/?LinkID=533687"
 
 if [[ "${DISABLE_UPDATE}" != "yes" ]]; then
-  setpath "product" "updateUrl" "https://vscodium.now.sh"
+  setpath "product" "updateUrl" "https://raw.githubusercontent.com/VSCodium/versions/refs/heads/master"
+  setpath "product" "downloadUrl" "https://github.com/VSCodium/vscodium/releases"
 fi
 
 if [[ "${VSCODE_QUALITY}" == "insider" ]]; then
@@ -152,20 +180,21 @@ else
   setpath "product" "win32arm64UserAppId" "{{57FD70A5-1B8D-4875-9F40-C5553F094828}"
 fi
 
-echo "$( jq -s '.[0] * .[1]' product.json ../product.json )" > product.json
+jsonTmp=$( jq -s '.[0] * .[1]' product.json ../product.json )
+echo "${jsonTmp}" > product.json && unset jsonTmp
 
 cat product.json
 
 # package.json
-cp package.json package.json.bak
+cp package.json{,.bak}
 
-setpath "package" "version" $( echo "${RELEASE_VERSION}" | sed -n -E "s/^(.*)\.([0-9]+)(-insider)?$/\1/p" )
-setpath "package" "release" $( echo "${RELEASE_VERSION}" | sed -n -E "s/^(.*)\.([0-9]+)(-insider)?$/\2/p" )
+setpath "package" "version" "$( echo "${RELEASE_VERSION}" | sed -n -E "s/^(.*)\.([0-9]+)(-insider)?$/\1/p" )"
+setpath "package" "release" "$( echo "${RELEASE_VERSION}" | sed -n -E "s/^(.*)\.([0-9]+)(-insider)?$/\2/p" )"
 
 replace 's|Microsoft Corporation|VSCodium|' package.json
 
 # announcements
-replace "s|\\[\\/\\* BUILTIN_ANNOUNCEMENTS \\*\\/\\]|$( cat ../announcements-builtin.json | tr -d '\n' )|" src/vs/workbench/contrib/welcomeGettingStarted/browser/gettingStarted.ts
+replace "s|\\[\\/\\* BUILTIN_ANNOUNCEMENTS \\*\\/\\]|$( tr -d '\n' < ../announcements-builtin.json )|" src/vs/workbench/contrib/welcomeGettingStarted/browser/gettingStarted.ts
 
 ../undo_telemetry.sh
 
@@ -194,16 +223,16 @@ if [[ "${OS_NAME}" == "linux" ]]; then
 
   # control.template
   sed -i 's|Microsoft Corporation <vscode-linux@microsoft.com>|VSCodium Team https://github.com/VSCodium/vscodium/graphs/contributors|'  resources/linux/debian/control.template
-  sed -i 's|https://code.visualstudio.com|https://vscodium.com|' resources/linux/debian/control.template
   sed -i 's|Visual Studio Code|VSCodium|g' resources/linux/debian/control.template
   sed -i 's|https://code.visualstudio.com/docs/setup/linux|https://github.com/VSCodium/vscodium#download-install|' resources/linux/debian/control.template
+  sed -i 's|https://code.visualstudio.com|https://vscodium.com|' resources/linux/debian/control.template
 
   # code.spec.template
-  sed -i 's|https://code.visualstudio.com/docs/setup/linux|https://github.com/VSCodium/vscodium#download-install|' resources/linux/rpm/code.spec.template
   sed -i 's|Microsoft Corporation|VSCodium Team|' resources/linux/rpm/code.spec.template
   sed -i 's|Visual Studio Code Team <vscode-linux@microsoft.com>|VSCodium Team https://github.com/VSCodium/vscodium/graphs/contributors|' resources/linux/rpm/code.spec.template
-  sed -i 's|https://code.visualstudio.com|https://vscodium.com|' resources/linux/rpm/code.spec.template
   sed -i 's|Visual Studio Code|VSCodium|' resources/linux/rpm/code.spec.template
+  sed -i 's|https://code.visualstudio.com/docs/setup/linux|https://github.com/VSCodium/vscodium#download-install|' resources/linux/rpm/code.spec.template
+  sed -i 's|https://code.visualstudio.com|https://vscodium.com|' resources/linux/rpm/code.spec.template
 
   # snapcraft.yaml
   sed -i 's|Visual Studio Code|VSCodium|'  resources/linux/rpm/code.spec.template

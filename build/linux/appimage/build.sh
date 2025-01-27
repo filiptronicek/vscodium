@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -ex
 
@@ -15,11 +15,11 @@ if [[ "${VSCODE_ARCH}" == "x64" ]]; then
     exit 1
   fi
 
-  wget -c "${APPIMAGE_URL}"
+  wget -c "${APPIMAGE_URL}" -O pkg2appimage.AppImage
 
-  chmod +x ./pkg2appimage-*.AppImage
+  chmod +x ./pkg2appimage.AppImage
 
-  ./pkg2appimage-*.AppImage --appimage-extract && mv ./squashfs-root ./pkg2appimage.AppDir
+  ./pkg2appimage.AppImage --appimage-extract && mv ./squashfs-root ./pkg2appimage.AppDir
 
   # add update's url
   sed -i 's/generate_type2_appimage/generate_type2_appimage -u "gh-releases-zsync|VSCodium|vscodium|latest|*.AppImage.zsync"/' pkg2appimage.AppDir/AppRun
@@ -37,6 +37,8 @@ if [[ "${VSCODE_ARCH}" == "x64" ]]; then
     sed -i 's|@@ICON@@|vscodium|g' recipe.yml
   fi
 
+  # workaround that enforces x86 ARCH for pkg2appimage having /__w/vscodium/vscodium/build/linux/appimage/VSCodium/VSCodium.AppDir/usr/share/codium/resources/app/node_modules/rc/index.js is of architecture armhf
+  export ARCH=x86_64
   bash -ex pkg2appimage.AppDir/AppRun recipe.yml
 
   rm -f pkg2appimage-*.AppImage
